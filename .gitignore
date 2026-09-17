@@ -2,3 +2,5 @@
 *.pyc
 todos.db
 .venv/
+.vercel
+.env*

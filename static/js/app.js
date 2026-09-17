@@ -1,234 +1,235 @@
 /* ==========================================================================
-   TaskFlow Frontend Application Logic
+   ValueCheck Frontend Application Logic
+   판단 기록은 서버에 저장되지 않고, 이 브라우저의 localStorage에만 저장됩니다.
    ========================================================================== */
 
 document.addEventListener('DOMContentLoaded', () => {
+  const STORAGE_KEY = 'valuecheck_history';
+  const TIER_LABELS = {
+    'strong-buy': '강력 매수 고려',
+    'buy': '매수 고려',
+    'neutral': '중립 · 관망',
+    'caution': '신중 검토 필요',
+    'avoid': '매도 · 회피 고려',
+  };
+  const POSITIVE_TIERS = ['strong-buy', 'buy'];
+  const CAUTION_TIERS = ['caution', 'avoid'];
+
   // State Management
   const state = {
-    todos: [],
-    filterStatus: 'all',
-    filterCategory: 'all',
+    history: [],
+    filterTier: 'all',
     searchQuery: '',
+    sort: 'recent',
   };
 
   // DOM Elements
-  const todoList = document.getElementById('todo-list');
+  const evalForm = document.getElementById('eval-form');
+  const tickerInput = document.getElementById('ticker-input');
+  const metricInputs = {
+    per: document.getElementById('m-per'),
+    pbr: document.getElementById('m-pbr'),
+    roe: document.getElementById('m-roe'),
+    operating_margin: document.getElementById('m-operating-margin'),
+    debt_ratio: document.getElementById('m-debt-ratio'),
+    revenue_growth: document.getElementById('m-revenue-growth'),
+    profit_growth: document.getElementById('m-profit-growth'),
+    dividend_yield: document.getElementById('m-dividend-yield'),
+  };
+
+  const resultPanel = document.getElementById('result-panel');
+  const verdictLabel = document.getElementById('verdict-label');
+  const verdictTicker = document.getElementById('verdict-ticker');
+  const verdictScore = document.getElementById('verdict-score');
+  const scoreGaugeFill = document.getElementById('score-gauge-fill');
+  const breakdownGrid = document.getElementById('breakdown-grid');
+
+  const historyList = document.getElementById('history-list');
   const emptyState = document.getElementById('empty-state');
-  const todoForm = document.getElementById('todo-form');
-  const todoTitleInput = document.getElementById('todo-title');
-  const todoCategoryInput = document.getElementById('todo-category');
-  const todoPriorityInput = document.getElementById('todo-priority');
-  const todoDueDateInput = document.getElementById('todo-due-date');
-  const todoDescInput = document.getElementById('todo-desc');
 
   const statTotal = document.getElementById('stat-total');
-  const statActive = document.getElementById('stat-active');
-  const statCompleted = document.getElementById('stat-completed');
+  const statPositive = document.getElementById('stat-positive');
+  const statCaution = document.getElementById('stat-caution');
   const statRate = document.getElementById('stat-rate');
   const progressFill = document.getElementById('progress-fill');
 
-  const statusTabs = document.querySelectorAll('#status-tabs .tab-btn');
+  const tierTabs = document.querySelectorAll('#tier-tabs .tab-btn');
   const searchInput = document.getElementById('search-input');
-  const filterCategorySelect = document.getElementById('filter-category');
-  const btnClearCompleted = document.getElementById('btn-clear-completed');
-
-  const editModal = document.getElementById('edit-modal');
-  const editForm = document.getElementById('edit-form');
-  const editId = document.getElementById('edit-id');
-  const editTitle = document.getElementById('edit-title');
-  const editCategory = document.getElementById('edit-category');
-  const editPriority = document.getElementById('edit-priority');
-  const editDueDate = document.getElementById('edit-due-date');
-  const editDesc = document.getElementById('edit-desc');
-  const btnCancelEdit = document.getElementById('btn-cancel-edit');
-  const modalClose = document.getElementById('modal-close');
+  const sortSelect = document.getElementById('sort-select');
+  const btnClearHistory = document.getElementById('btn-clear-history');
 
   const themeToggle = document.getElementById('theme-toggle');
   const currentDateEl = document.getElementById('current-date');
   const toastContainer = document.getElementById('toast-container');
 
-  // 1. Initial Setup: Date & Theme
+  // Initial Setup
   initDateDisplay();
   initTheme();
-
-  // 2. Fetch Initial Data
-  fetchTodos();
-  fetchStats();
+  loadHistory();
+  renderHistory();
+  renderStats();
 
   // ==========================================
-  // API Calls
+  // API Call
   // ==========================================
 
-  // Fetch Todos with current filters
-  async function fetchTodos() {
+  async function evaluate(payload) {
     try {
-      const params = new URLSearchParams();
-      if (state.filterStatus !== 'all') params.append('status', state.filterStatus);
-      if (state.filterCategory !== 'all') params.append('category', state.filterCategory);
-      if (state.searchQuery) params.append('search', state.searchQuery);
-
-      const res = await fetch(`/api/todos?${params.toString()}`);
-      if (!res.ok) throw new Error('목록을 불러오는 중 오류가 발생했습니다.');
-      state.todos = await res.json();
-      renderTodoList();
-    } catch (err) {
-      console.error(err);
-      showToast(err.message, 'error');
-    }
-  }
-
-  // Fetch Dashboard Stats
-  async function fetchStats() {
-    try {
-      const res = await fetch('/api/stats');
-      if (!res.ok) throw new Error('통계를 불러오지 못했습니다.');
-      const stats = await res.json();
-
-      statTotal.textContent = stats.total;
-      statActive.textContent = stats.active;
-      statCompleted.textContent = stats.completed;
-      statRate.textContent = `${stats.completion_rate}%`;
-      progressFill.style.width = `${stats.completion_rate}%`;
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  // Create Todo
-  async function createTodo(payload) {
-    try {
-      const res = await fetch('/api/todos', {
+      const res = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || '할 일 추가 실패');
-      }
-      showToast('새 할 일이 추가되었습니다.', 'success');
-      fetchTodos();
-      fetchStats();
-      todoForm.reset();
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  // Toggle Todo Completion
-  async function toggleTodo(id) {
-    try {
-      const res = await fetch(`/api/todos/${id}/toggle`, { method: 'PATCH' });
-      if (!res.ok) throw new Error('상태 변경 실패');
-      fetchTodos();
-      fetchStats();
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  // Delete Todo
-  async function deleteTodo(id) {
-    if (!confirm('이 할 일을 삭제하시겠습니까?')) return;
-    try {
-      const res = await fetch(`/api/todos/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('삭제 실패');
-      showToast('할 일이 삭제되었습니다.', 'success');
-      fetchTodos();
-      fetchStats();
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  // Update Todo
-  async function updateTodo(id, payload) {
-    try {
-      const res = await fetch(`/api/todos/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || '수정 실패');
-      }
-      showToast('할 일이 업데이트되었습니다.', 'success');
-      closeEditModal();
-      fetchTodos();
-      fetchStats();
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }
-
-  // Clear Completed Todos
-  async function clearCompleted() {
-    try {
-      const res = await fetch('/api/todos/clear-completed', { method: 'POST' });
-      if (!res.ok) throw new Error('완료 항목 정리 실패');
       const data = await res.json();
-      showToast(data.message || '완료된 항목이 정리되었습니다.', 'success');
-      fetchTodos();
-      fetchStats();
+      if (!res.ok) throw new Error(data.error || '판단 요청에 실패했습니다.');
+
+      renderResult(data);
+      saveToHistory(data);
+      showToast('판단이 완료되어 기록에 저장되었습니다.', 'success');
     } catch (err) {
       showToast(err.message, 'error');
     }
   }
 
   // ==========================================
-  // Rendering
+  // Result Rendering
   // ==========================================
 
-  function renderTodoList() {
-    todoList.innerHTML = '';
+  function renderResult(data) {
+    resultPanel.style.display = 'block';
+    verdictLabel.textContent = data.verdict;
+    verdictLabel.className = `verdict-label verdict-${data.tier}`;
+    verdictTicker.textContent = data.ticker ? `· ${data.ticker}` : '';
+    verdictScore.innerHTML = `${data.score}<span class="score-unit">점 (${data.percentage}%)</span>`;
+    scoreGaugeFill.style.width = `${data.percentage}%`;
 
-    if (state.todos.length === 0) {
+    breakdownGrid.innerHTML = data.breakdown.map(renderBreakdownItem).join('');
+    resultPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function renderBreakdownItem(item) {
+    const scoreClass = item.score > 0 ? 'positive' : item.score < 0 ? 'negative' : 'zero';
+    const scoreText = item.score > 0 ? `+${item.score}` : `${item.score}`;
+    return `
+      <div class="breakdown-item">
+        <div class="breakdown-item-header">
+          <span>${escapeHtml(item.label)} = ${item.value}</span>
+          <span class="breakdown-score ${scoreClass}">${scoreText}</span>
+        </div>
+        <div class="breakdown-comment">${escapeHtml(item.comment)}</div>
+      </div>
+    `;
+  }
+
+  // ==========================================
+  // History (localStorage)
+  // ==========================================
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      state.history = raw ? JSON.parse(raw) : [];
+    } catch (err) {
+      state.history = [];
+    }
+  }
+
+  function persistHistory() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.history));
+  }
+
+  function saveToHistory(data) {
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      ticker: data.ticker,
+      score: data.score,
+      percentage: data.percentage,
+      verdict: data.verdict,
+      tier: data.tier,
+      breakdown: data.breakdown,
+      createdAt: new Date().toISOString(),
+    };
+    state.history.unshift(entry);
+    persistHistory();
+    renderHistory();
+    renderStats();
+  }
+
+  function deleteHistoryItem(id) {
+    state.history = state.history.filter((item) => item.id !== id);
+    persistHistory();
+    renderHistory();
+    renderStats();
+  }
+
+  function clearHistory() {
+    state.history = [];
+    persistHistory();
+    renderHistory();
+    renderStats();
+  }
+
+  // ==========================================
+  // History Rendering
+  // ==========================================
+
+  function getFilteredHistory() {
+    let list = [...state.history];
+
+    if (state.filterTier === 'positive') {
+      list = list.filter((item) => POSITIVE_TIERS.includes(item.tier));
+    } else if (state.filterTier === 'caution') {
+      list = list.filter((item) => CAUTION_TIERS.includes(item.tier));
+    }
+
+    if (state.searchQuery) {
+      const q = state.searchQuery.toLowerCase();
+      list = list.filter((item) => (item.ticker || '').toLowerCase().includes(q));
+    }
+
+    if (state.sort === 'score-desc') {
+      list.sort((a, b) => b.score - a.score);
+    } else if (state.sort === 'score-asc') {
+      list.sort((a, b) => a.score - b.score);
+    } else {
+      list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    return list;
+  }
+
+  function renderHistory() {
+    const list = getFilteredHistory();
+    historyList.innerHTML = '';
+
+    if (list.length === 0) {
       emptyState.style.display = 'block';
       return;
     }
-
     emptyState.style.display = 'none';
 
-    state.todos.forEach(todo => {
-      const item = document.createElement('div');
-      item.className = `todo-item ${todo.completed ? 'completed' : ''} priority-${todo.priority}`;
-      item.setAttribute('data-id', todo.id);
+    list.forEach((item) => {
+      const el = document.createElement('div');
+      el.className = `todo-item verdict-${item.tier}`;
+      el.setAttribute('data-id', item.id);
 
-      const priorityLabels = { high: '높음', medium: '보통', low: '낮음' };
-
-      item.innerHTML = `
-        <div class="todo-left">
-          <label class="custom-checkbox" title="${todo.completed ? '미완료로 변경' : '완료로 표시'}">
-            <input type="checkbox" ${todo.completed ? 'checked' : ''} data-action="toggle" />
-            <span class="checkbox-visual">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-            </span>
-          </label>
-
+      el.innerHTML = `
+        <div class="todo-left" data-action="toggle-expand">
+          <span class="tier-dot"></span>
           <div class="todo-content">
-            <span class="todo-title">${escapeHtml(todo.title)}</span>
-            ${todo.description ? `<p class="todo-desc">${escapeHtml(todo.description)}</p>` : ''}
+            <span class="todo-title">${escapeHtml(item.ticker || '무명 종목')}</span>
             <div class="todo-meta">
-              <span class="meta-chip category">🏷️ ${escapeHtml(todo.category)}</span>
-              <span class="meta-chip priority-${todo.priority}">
-                ${todo.priority === 'high' ? '🔥' : todo.priority === 'medium' ? '⚡' : '🌱'} 
-                ${priorityLabels[todo.priority] || '보통'}
-              </span>
-              ${todo.due_date ? `<span class="meta-chip date">📅 ${escapeHtml(todo.due_date)}</span>` : ''}
+              <span class="meta-chip verdict-chip verdict-${item.tier}">${escapeHtml(item.verdict)}</span>
+              <span class="meta-chip score-chip">${item.score}점 (${item.percentage}%)</span>
+              <span class="meta-chip date">📅 ${formatDate(item.createdAt)}</span>
+            </div>
+            <div class="breakdown-grid mini" style="display: none;">
+              ${item.breakdown.map(renderBreakdownItem).join('')}
             </div>
           </div>
         </div>
 
         <div class="todo-actions">
-          <button class="btn-action btn-edit" title="수정" data-action="edit">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-            </svg>
-          </button>
           <button class="btn-action btn-delete" title="삭제" data-action="delete">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6"></polyline>
@@ -240,117 +241,80 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       `;
 
-      // Event delegation for item actions
-      item.addEventListener('click', (e) => {
+      el.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-action]');
         if (!btn) return;
-
         const action = btn.getAttribute('data-action');
-        if (action === 'toggle') {
-          toggleTodo(todo.id);
-        } else if (action === 'edit') {
-          openEditModal(todo);
-        } else if (action === 'delete') {
-          deleteTodo(todo.id);
+        if (action === 'delete') {
+          if (confirm('이 판단 기록을 삭제하시겠습니까?')) deleteHistoryItem(item.id);
+        } else if (action === 'toggle-expand') {
+          const mini = el.querySelector('.breakdown-grid.mini');
+          mini.style.display = mini.style.display === 'none' ? 'grid' : 'none';
         }
       });
 
-      todoList.appendChild(item);
+      historyList.appendChild(el);
     });
   }
 
-  // ==========================================
-  // Modal Handling
-  // ==========================================
+  function renderStats() {
+    const total = state.history.length;
+    const positive = state.history.filter((item) => POSITIVE_TIERS.includes(item.tier)).length;
+    const caution = state.history.filter((item) => CAUTION_TIERS.includes(item.tier)).length;
+    const rate = total > 0 ? Math.round((positive / total) * 1000) / 10 : 0;
 
-  function openEditModal(todo) {
-    editId.value = todo.id;
-    editTitle.value = todo.title;
-    editCategory.value = todo.category || '일반';
-    editPriority.value = todo.priority || 'medium';
-    editDueDate.value = todo.due_date || '';
-    editDesc.value = todo.description || '';
-    editModal.style.display = 'flex';
-    editTitle.focus();
+    statTotal.textContent = total;
+    statPositive.textContent = positive;
+    statCaution.textContent = caution;
+    statRate.textContent = `${rate}%`;
+    progressFill.style.width = `${rate}%`;
   }
-
-  function closeEditModal() {
-    editModal.style.display = 'none';
-  }
-
-  modalClose.addEventListener('click', closeEditModal);
-  btnCancelEdit.addEventListener('click', closeEditModal);
-  editModal.addEventListener('click', (e) => {
-    if (e.target === editModal) closeEditModal();
-  });
-
-  editForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const id = editId.value;
-    const payload = {
-      title: editTitle.value.trim(),
-      category: editCategory.value,
-      priority: editPriority.value,
-      due_date: editDueDate.value || null,
-      description: editDesc.value.trim()
-    };
-    updateTodo(id, payload);
-  });
 
   // ==========================================
   // Form Submission
   // ==========================================
 
-  todoForm.addEventListener('submit', (e) => {
+  evalForm.addEventListener('submit', (e) => {
     e.preventDefault();
-    const title = todoTitleInput.value.trim();
-    if (!title) return;
-
-    const payload = {
-      title,
-      category: todoCategoryInput.value,
-      priority: todoPriorityInput.value,
-      due_date: todoDueDateInput.value || null,
-      description: todoDescInput.value.trim()
-    };
-
-    createTodo(payload);
+    const payload = { ticker: tickerInput.value.trim() };
+    for (const [key, input] of Object.entries(metricInputs)) {
+      payload[key] = input.value.trim();
+    }
+    evaluate(payload);
   });
 
   // ==========================================
-  // Filters & Search
+  // Filters, Search & Sort
   // ==========================================
 
-  // Tab Filtering
-  statusTabs.forEach(tab => {
+  tierTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
-      statusTabs.forEach(t => t.classList.remove('active'));
+      tierTabs.forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      state.filterStatus = tab.getAttribute('data-status');
-      fetchTodos();
+      state.filterTier = tab.getAttribute('data-tier');
+      renderHistory();
     });
   });
 
-  // Category Filtering
-  filterCategorySelect.addEventListener('change', (e) => {
-    state.filterCategory = e.target.value;
-    fetchTodos();
-  });
-
-  // Debounced Search
   let searchTimeout;
   searchInput.addEventListener('input', (e) => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
       state.searchQuery = e.target.value.trim();
-      fetchTodos();
-    }, 250);
+      renderHistory();
+    }, 200);
   });
 
-  // Clear Completed
-  btnClearCompleted.addEventListener('click', () => {
-    if (confirm('완료된 모든 항목을 삭제하시겠습니까?')) {
-      clearCompleted();
+  sortSelect.addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    renderHistory();
+  });
+
+  btnClearHistory.addEventListener('click', () => {
+    if (state.history.length === 0) return;
+    if (confirm('모든 판단 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+      clearHistory();
+      showToast('모든 기록이 삭제되었습니다.', 'success');
     }
   });
 
@@ -363,15 +327,20 @@ document.addEventListener('DOMContentLoaded', () => {
     currentDateEl.textContent = new Intl.DateTimeFormat('ko-KR', options).format(new Date());
   }
 
+  function formatDate(isoString) {
+    const options = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' };
+    return new Intl.DateTimeFormat('ko-KR', options).format(new Date(isoString));
+  }
+
   function initTheme() {
-    const savedTheme = localStorage.getItem('taskflow_theme') || 'theme-dark';
+    const savedTheme = localStorage.getItem('valuecheck_theme') || 'theme-dark';
     document.body.className = savedTheme;
 
     themeToggle.addEventListener('click', () => {
       const isDark = document.body.classList.contains('theme-dark');
       const newTheme = isDark ? 'theme-light' : 'theme-dark';
       document.body.className = newTheme;
-      localStorage.setItem('taskflow_theme', newTheme);
+      localStorage.setItem('valuecheck_theme', newTheme);
       showToast(isDark ? '라이트 테마로 전환되었습니다.' : '다크 테마로 전환되었습니다.', 'success');
     });
   }
@@ -393,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined) return '';
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
